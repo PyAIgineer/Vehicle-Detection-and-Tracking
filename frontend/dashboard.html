@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SENTINEL — Incident Intelligence System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&family=Barlow:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+/* ═══════════════════════════════════════════════════
+   TOKENS
+════════════════════════════════════════════════════ */
+:root {
+  --bg-void:      #080a0d;
+  --bg-panel:     #0d1117;
+  --bg-card:      #111820;
+  --bg-hover:     #161f2a;
+  --border:       #1e2d3d;
+  --border-glow:  #1e4060;
+
+  --amber:        #e8a000;
+  --amber-dim:    #7a5200;
+  --amber-glow:   rgba(232,160,0,0.12);
+  --red:          #e84040;
+  --red-dim:      #5c1010;
+  --red-glow:     rgba(232,64,64,0.15);
+  --green:        #00d97e;
+  --green-dim:    #003d22;
+  --green-glow:   rgba(0,217,126,0.10);
+  --cyan:         #00bcd4;
+  --cyan-dim:     #003540;
+  --blue:         #1e6fe8;
+  --muted:        #4a6070;
+  --text-primary: #c8d8e4;
+  --text-dim:     #5a7080;
+  --text-accent:  #e8f4ff;
+
+  --mono:         'Share Tech Mono', monospace;
+  --cond:         'Barlow Condensed', sans-serif;
+  --body:         'Barlow', sans-serif;
+
+  --scan-speed:   6s;
+  --pulse-speed:  2s;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  font-family: var(--body);
+  background: var(--bg-void);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Scanline overlay ─────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 999; pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg, transparent 0px, transparent 2px,
+    rgba(0,0,0,0.04) 2px, rgba(0,0,0,0.04) 4px
+  );
+}
+
+/* ── Noise overlay ────────────────────────────────── */
+body::after {
+  content: '';
+  position: fixed; inset: 0; z-index: 998; pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ══════════════════════════════════════════════════
+   HEADER
+══════════════════════════════════════════════════ */
+header {
+  height: 52px;
+  background: linear-gradient(90deg, #030608 0%, #0d1520 50%, #030608 100%);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 20px;
+  gap: 20px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+header::after {
+  content: '';
+  position: absolute; bottom: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--amber-dim) 20%, var(--amber) 50%, var(--amber-dim) 80%, transparent);
+}
+
+.logo {
+  font-family: var(--cond);
+  font-weight: 900;
+  font-size: 22px;
+  letter-spacing: 4px;
+  color: var(--amber);
+  text-shadow: 0 0 20px var(--amber-dim);
+  white-space: nowrap;
+}
+
+.logo span {
+  font-weight: 300;
+  font-size: 11px;
+  letter-spacing: 6px;
+  color: var(--muted);
+  display: block;
+  margin-top: -4px;
+}
+
+.header-status {
+  display: flex; align-items: center; gap: 24px;
+  margin-left: 24px;
+}
+
+.status-chip {
+  display: flex; align-items: center; gap: 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--muted);
+}
+.dot.active  { background: var(--green); box-shadow: 0 0 6px var(--green); animation: blink var(--pulse-speed) infinite; }
+.dot.warning { background: var(--amber); box-shadow: 0 0 6px var(--amber); animation: blink var(--pulse-speed) infinite; }
+.dot.alert   { background: var(--red);   box-shadow: 0 0 8px var(--red);   animation: blink 0.8s infinite; }
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+.header-time {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--amber);
+  letter-spacing: 2px;
+}
+
+.header-actions {
+  display: flex; gap: 8px;
+}
+
+.btn {
+  font-family: var(--cond);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  border: none;
+  cursor: pointer;
+  padding: 7px 16px;
+  border-radius: 2px;
+  transition: all 0.15s;
+}
+
+.btn-primary {
+  background: var(--amber);
+  color: #000;
+}
+.btn-primary:hover { background: #ffb800; box-shadow: 0 0 16px var(--amber-dim); }
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { border-color: var(--amber-dim); color: var(--amber); }
+
+.btn-danger {
+  background: transparent;
+  color: var(--red);
+  border: 1px solid var(--red-dim);
+}
+.btn-danger:hover { background: var(--red-glow); }
+
+/* ══════════════════════════════════════════════════
+   MAIN LAYOUT
+══════════════════════════════════════════════════ */
+.main {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  grid-template-rows: 1fr;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+}
+
+/* ══════════════════════════════════════════════════
+   CAMERA GRID
+══════════════════════════════════════════════════ */
+.camera-section {
+  display: flex; flex-direction: column;
+  padding: 12px;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.section-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.section-label {
+  font-family: var(--cond);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.section-count {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--green);
+  background: var(--green-dim);
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+
+.camera-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Camera Tile ────────────────────────────────── */
+.camera-tile {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  transition: border-color 0.2s;
+}
+
+.camera-tile:hover { border-color: var(--border-glow); }
+.camera-tile.streaming { border-color: #1e3040; }
+.camera-tile.alert { border-color: var(--red); animation: border-pulse 1s infinite; }
+.camera-tile.target { border-color: var(--amber); box-shadow: 0 0 20px rgba(232,160,0,0.15); }
+
+@keyframes border-pulse {
+  0%,100% { border-color: var(--red); box-shadow: 0 0 8px var(--red-glow); }
+  50%      { border-color: var(--red-dim); box-shadow: none; }
+}
+
+/* Scan-line effect on live cameras */
+.camera-tile.streaming .feed::after {
+  content: '';
+  position: absolute; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0,189,212,0.5), transparent);
+  animation: scanline var(--scan-speed) linear infinite;
+  pointer-events: none;
+  top: 0;
+}
+@keyframes scanline { 0%{top:0} 100%{top:100%} }
+
+.camera-tile-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px;
+  background: linear-gradient(180deg, #0e1620 0%, transparent 100%);
+  border-bottom: 1px solid rgba(30,45,61,0.5);
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+.cam-id {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--amber);
+  letter-spacing: 1px;
+}
+
+.cam-location {
+  font-family: var(--cond);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.cam-status-row {
+  display: flex; align-items: center; gap: 8px;
+}
+
+.cam-state-badge {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  background: var(--bg-void);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  text-transform: uppercase;
+}
+.cam-state-badge.streaming { color: var(--green); border-color: var(--green-dim); }
+.cam-state-badge.connecting { color: var(--amber); border-color: var(--amber-dim); }
+.cam-state-badge.error,
+.cam-state-badge.stopped { color: var(--red); border-color: var(--red-dim); }
+
+.cam-toggle {
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.15s;
+}
+.cam-toggle:hover     { border-color: var(--amber-dim); color: var(--amber); }
+.cam-toggle.streaming { border-color: var(--red-dim); color: var(--red); }
+.cam-toggle.streaming:hover { background: var(--red-glow); }
+
+.feed {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-void);
+  display: flex; align-items: center; justify-content: center;
+  min-height: 0;
+}
+
+.feed img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.feed-placeholder {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+
+.feed-placeholder .icon {
+  font-size: 28px; opacity: 0.2;
+}
+
+.feed-placeholder .label {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+}
+
+/* Corner brackets */
+.camera-tile::before,
+.camera-tile::after {
+  content: '';
+  position: absolute;
+  width: 12px; height: 12px;
+  pointer-events: none;
+  z-index: 3;
+}
+.camera-tile::before {
+  top: 0; left: 0;
+  border-top: 1px solid var(--amber-dim);
+  border-left: 1px solid var(--amber-dim);
+}
+.camera-tile::after {
+  bottom: 0; right: 0;
+  border-bottom: 1px solid var(--amber-dim);
+  border-right: 1px solid var(--amber-dim);
+}
+
+/* Camera stats overlay */
+.cam-stats {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(0deg, rgba(8,10,13,0.9) 0%, transparent 100%);
+  padding: 6px 10px 4px;
+  display: flex; gap: 12px;
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  pointer-events: none;
+}
+
+.cam-stat { display: flex; gap: 4px; }
+.cam-stat .k { color: var(--muted); }
+.cam-stat .v { color: var(--cyan); }
+
+/* ══════════════════════════════════════════════════
+   RIGHT PANEL
+══════════════════════════════════════════════════ */
+.right-panel {
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-panel);
+}
+
+/* ── Tab Bar ────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tab {
+  flex: 1;
+  font-family: var(--cond);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 10px 4px;
+  text-align: center;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.tab:hover  { color: var(--text-primary); }
+.tab.active { color: var(--amber); border-bottom-color: var(--amber); }
+
+/* ── Panel Content ──────────────────────────────── */
+.panel-content { display: none; flex: 1; overflow-y: auto; flex-direction: column; }
+.panel-content.active { display: flex; }
+
+.panel-content::-webkit-scrollbar { width: 4px; }
+.panel-content::-webkit-scrollbar-track { background: transparent; }
+.panel-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Alert Feed ─────────────────────────────────── */
+.alert-feed { flex: 1; overflow-y: auto; padding: 10px; gap: 8px; display: flex; flex-direction: column; }
+
+.alert-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--muted);
+  animation: slide-in 0.3s ease;
+}
+.alert-item.crash   { border-left-color: var(--red);   background: linear-gradient(90deg, rgba(232,64,64,0.05) 0%, var(--bg-card) 100%); }
+.alert-item.flee    { border-left-color: var(--amber);  background: linear-gradient(90deg, rgba(232,160,0,0.05) 0%, var(--bg-card) 100%); }
+.alert-item.anomaly { border-left-color: var(--cyan);   background: linear-gradient(90deg, rgba(0,189,212,0.05) 0%, var(--bg-card) 100%); }
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.alert-type {
+  font-family: var(--cond);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.alert-type.crash   { color: var(--red); }
+.alert-type.flee    { color: var(--amber); }
+.alert-type.anomaly { color: var(--cyan); }
+
+.alert-location {
+  font-family: var(--cond);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-accent);
+  margin-bottom: 2px;
+}
+
+.alert-meta {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  display: flex; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.alert-plate {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--amber);
+  background: rgba(232,160,0,0.08);
+  border: 1px solid var(--amber-dim);
+  padding: 1px 8px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-bottom: 4px;
+}
+
+.alert-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.alert-route {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.alert-route span { color: var(--green); }
+
+/* ── Stats Panel ────────────────────────────────── */
+.stats-panel { padding: 14px; gap: 12px; display: flex; flex-direction: column; }
+
+.stat-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 12px 14px;
+}
+
+.stat-group-title {
+  font-family: var(--cond);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.stat-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(30,45,61,0.4);
+}
+.stat-row:last-child { border-bottom: none; }
+
+.stat-label {
+  font-family: var(--body);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.stat-value {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-accent);
+}
+.stat-value.green  { color: var(--green); }
+.stat-value.amber  { color: var(--amber); }
+.stat-value.red    { color: var(--red); }
+
+/* Priority bars */
+.priority-bars { gap: 8px; display: flex; flex-direction: column; }
+
+.priority-bar-row {
+  display: flex; align-items: center; gap: 10px;
+}
+
+.priority-bar-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.priority-bar-track {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-void);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.priority-bar-fill {
+  height: 100%;
+  background: var(--amber);
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
+
+.priority-bar-fill.high { background: var(--red); }
+.priority-bar-fill.low  { background: var(--muted); }
+
+.priority-bar-val {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--amber);
+  width: 16px;
+  text-align: right;
+}
+
+/* ── Vehicle Tracker ────────────────────────────── */
+.vehicle-list { padding: 10px; gap: 8px; display: flex; flex-direction: column; }
+
+.vehicle-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.vehicle-card:hover { border-color: var(--amber-dim); }
+.vehicle-card.motorcycle { border-left: 3px solid var(--amber); }
+
+.vehicle-card-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+
+.vehicle-id {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.vehicle-tag {
+  font-family: var(--cond);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--amber-dim);
+  color: var(--amber);
+}
+
+.vehicle-plate {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-accent);
+  margin-bottom: 6px;
+  letter-spacing: 2px;
+}
+
+.vehicle-cameras {
+  font-size: 10px;
+  color: var(--text-dim);
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+
+.cam-chip {
+  background: var(--bg-void);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 6px;
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--cyan);
+}
+
+/* ══════════════════════════════════════════════════
+   INCIDENT BANNER
+══════════════════════════════════════════════════ */
+.incident-banner {
+  position: fixed;
+  top: 60px; left: 50%; transform: translateX(-50%);
+  background: linear-gradient(90deg, var(--red-dim), #2a0a0a, var(--red-dim));
+  border: 1px solid var(--red);
+  border-radius: 3px;
+  padding: 10px 28px;
+  display: flex; align-items: center; gap: 14px;
+  z-index: 1000;
+  box-shadow: 0 0 40px rgba(232,64,64,0.3);
+  animation: banner-in 0.4s ease, banner-pulse 1.5s ease 0.4s infinite;
+  display: none;
+}
+
+@keyframes banner-in { from { opacity: 0; top: 52px; } to { opacity: 1; top: 60px; } }
+@keyframes banner-pulse {
+  0%,100% { box-shadow: 0 0 40px rgba(232,64,64,0.3); }
+  50%      { box-shadow: 0 0 60px rgba(232,64,64,0.5); }
+}
+
+.banner-icon { font-size: 20px; }
+.banner-text { }
+.banner-title {
+  font-family: var(--cond);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--red);
+  text-transform: uppercase;
+}
+.banner-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.banner-close {
+  margin-left: 16px;
+  background: none; border: none;
+  color: var(--muted); cursor: pointer;
+  font-size: 16px;
+  font-family: var(--mono);
+}
+
+/* ══════════════════════════════════════════════════
+   SCROLLBARS
+══════════════════════════════════════════════════ */
+.alert-feed::-webkit-scrollbar { width: 3px; }
+.alert-feed::-webkit-scrollbar-track { background: transparent; }
+.alert-feed::-webkit-scrollbar-thumb { background: var(--border); }
+
+.vehicle-list::-webkit-scrollbar { width: 3px; }
+.vehicle-list::-webkit-scrollbar-track { background: transparent; }
+.vehicle-list::-webkit-scrollbar-thumb { background: var(--border); }
+
+/* ══════════════════════════════════════════════════
+   UTILITY
+══════════════════════════════════════════════════ */
+.flex-gap-4  { display: flex; gap: 4px; }
+.flex-gap-8  { display: flex; gap: 8px; }
+.mt-auto     { margin-top: auto; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════
+     INCIDENT BANNER
+════════════════════════════════════════ -->
+<div class="incident-banner" id="incidentBanner">
+  <div class="banner-icon">⚠</div>
+  <div class="banner-text">
+    <div class="banner-title" id="bannerTitle">INCIDENT DETECTED</div>
+    <div class="banner-sub" id="bannerSub">—</div>
+  </div>
+  <button class="banner-close" onclick="closeBanner()">✕</button>
+</div>
+
+<!-- ═══════════════════════════════════════
+     HEADER
+════════════════════════════════════════ -->
+<header>
+  <div class="logo">
+    SENTINEL
+    <span>INCIDENT INTELLIGENCE SYSTEM</span>
+  </div>
+
+  <div class="header-status">
+    <div class="status-chip">
+      <div class="dot active" id="systemDot"></div>
+      <span id="systemStatus">SYSTEM ONLINE</span>
+    </div>
+    <div class="status-chip">
+      <div class="dot active" id="camDot"></div>
+      <span id="camCount">0 / 6 CAMERAS</span>
+    </div>
+    <div class="status-chip">
+      <div class="dot" id="incidentDot"></div>
+      <span id="incidentCount">NO INCIDENTS</span>
+    </div>
+  </div>
+
+  <div class="header-time" id="headerTime">00:00:00</div>
+
+  <div class="header-actions">
+    <button class="btn btn-primary" onclick="startAll()">▶ START ALL</button>
+    <button class="btn btn-danger"  onclick="stopAll()">■ STOP ALL</button>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════
+     MAIN LAYOUT
+════════════════════════════════════════ -->
+<div class="main">
+
+  <!-- ── Camera Grid ───────────────────── -->
+  <div class="camera-section">
+    <div class="section-header">
+      <span class="section-label">Live Feeds</span>
+      <span class="section-count" id="liveCount">0 LIVE</span>
+    </div>
+
+    <div class="camera-grid" id="cameraGrid">
+      <!-- Tiles injected by JS -->
+    </div>
+  </div>
+
+  <!-- ── Right Panel ───────────────────── -->
+  <div class="right-panel">
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('alerts',this)">Alerts</div>
+      <div class="tab"        onclick="switchTab('stats',this)">Stats</div>
+      <div class="tab"        onclick="switchTab('vehicles',this)">Vehicles</div>
+    </div>
+
+    <!-- Alerts Tab -->
+    <div class="panel-content active" id="tab-alerts">
+      <div class="alert-feed" id="alertFeed">
+        <div style="padding:20px; text-align:center; font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:2px;">
+          MONITORING — AWAITING EVENTS
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats Tab -->
+    <div class="panel-content" id="tab-stats">
+      <div class="stats-panel">
+
+        <div class="stat-group">
+          <div class="stat-group-title">System</div>
+          <div class="stat-row">
+            <span class="stat-label">Active Cameras</span>
+            <span class="stat-value green" id="s-active">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Total Incidents</span>
+            <span class="stat-value amber" id="s-incidents">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Vehicles Tracked</span>
+            <span class="stat-value" id="s-vehicles">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Motorcycles</span>
+            <span class="stat-value amber" id="s-motos">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Cross-Camera ReID</span>
+            <span class="stat-value cyan" id="s-reid">0</span>
+          </div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-group-title">Camera Priority</div>
+          <div class="priority-bars" id="priorityBars">
+            <!-- Injected by JS -->
+          </div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-group-title">Camera Health</div>
+          <div id="camHealth">
+            <!-- Injected by JS -->
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Vehicles Tab -->
+    <div class="panel-content" id="tab-vehicles">
+      <div class="vehicle-list" id="vehicleList">
+        <div style="padding:20px; text-align:center; font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:2px;">
+          NO VEHICLES TRACKED
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════
+// CONFIG (matches config.py)
+// ═══════════════════════════════════════════════════
+const API = 'http://localhost:8000';
+const WS_BASE = 'ws://localhost:8000';
+
+const CAMERAS = {
+  cctv_01: 'Intersection North',
+  cctv_02: 'Highway Entry',
+  cctv_03: 'Market Road',
+  cctv_04: 'Ring Road East',
+  cctv_05: 'Ring Road West',
+  cctv_06: 'Exit Point South',
+};
+
+// ═══════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════
+const state = {
+  cameraStates: {},     // cam_id -> {state, fps, frames_read, ...}
+  wsStreams: {},         // cam_id -> WebSocket
+  alertWS: null,
+  incidents: 0,
+  priorities: {},
+  vehicles: { total: 0, motorcycles: 0, multi_camera: 0 },
+};
+
+// ═══════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════
+function init() {
+  buildCameraGrid();
+  buildPriorityBars();
+  startClock();
+  connectAlertWS();
+  pollStatus();
+  setInterval(pollStatus, 3000);
+  setInterval(pollVehicles, 5000);
+  setInterval(pollIncidents, 4000);
+}
+
+// ═══════════════════════════════════════════════════
+// CAMERA GRID
+// ═══════════════════════════════════════════════════
+function buildCameraGrid() {
+  const grid = document.getElementById('cameraGrid');
+  grid.innerHTML = '';
+  Object.entries(CAMERAS).forEach(([id, location]) => {
+    grid.insertAdjacentHTML('beforeend', `
+      <div class="camera-tile" id="tile-${id}">
+        <div class="camera-tile-header">
+          <div>
+            <div class="cam-id">${id.toUpperCase()}</div>
+            <div class="cam-location">${location}</div>
+          </div>
+          <div class="cam-status-row">
+            <span class="cam-state-badge" id="badge-${id}">IDLE</span>
+            <button class="cam-toggle" id="toggle-${id}" onclick="toggleCamera('${id}')">START</button>
+          </div>
+        </div>
+        <div class="feed" id="feed-${id}">
+          <div class="feed-placeholder">
+            <div class="icon">📷</div>
+            <div class="label">NO SIGNAL</div>
+          </div>
+          <canvas id="canvas-${id}" style="width:100%;height:100%;display:none;"></canvas>
+          <div class="cam-stats" id="stats-${id}" style="display:none">
+            <div class="cam-stat"><span class="k">FPS</span><span class="v" id="fps-${id}">—</span></div>
+            <div class="cam-stat"><span class="k">FR</span><span class="v" id="fr-${id}">—</span></div>
+            <div class="cam-stat"><span class="k">DROP</span><span class="v" id="drop-${id}">—</span></div>
+          </div>
+        </div>
+      </div>
+    `);
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// CAMERA CONTROLS
+// ═══════════════════════════════════════════════════
+async function toggleCamera(id) {
+  const s = state.cameraStates[id];
+  const isLive = s && s.state === 'STREAMING';
+  const endpoint = isLive ? 'stop' : 'start';
+  try {
+    await fetch(`${API}/api/cameras/${id}/${endpoint}`, { method: 'POST' });
+    if (!isLive) connectCameraWS(id);
+    else disconnectCameraWS(id);
+  } catch (e) { console.error(e); }
+}
+
+async function startAll() {
+  await fetch(`${API}/api/cameras/start-all`, { method: 'POST' });
+  Object.keys(CAMERAS).forEach(id => connectCameraWS(id));
+}
+
+async function stopAll() {
+  await fetch(`${API}/api/cameras/stop-all`, { method: 'POST' });
+  Object.keys(CAMERAS).forEach(id => disconnectCameraWS(id));
+}
+
+// ═══════════════════════════════════════════════════
+// WEBSOCKET STREAMS
+// ═══════════════════════════════════════════════════
+function connectCameraWS(id) {
+  if (state.wsStreams[id]) return;  // already connected
+  const ws = new WebSocket(`${WS_BASE}/ws/camera/${id}`);
+  ws.binaryType = 'blob';
+
+  ws.onopen = () => {
+    console.log(`WS stream open: ${id}`);
+    // Keep-alive ping every 10s
+    ws._pingInterval = setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, 10000);
+  };
+
+  ws.onmessage = (ev) => {
+    // ev.data is base64 JPEG string
+    const canvas = document.getElementById(`canvas-${id}`);
+    const placeholder = document.querySelector(`#feed-${id} .feed-placeholder`);
+    if (!canvas) return;
+
+    const img = new Image();
+    img.onload = () => {
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+    };
+    img.src = 'data:image/jpeg;base64,' + ev.data;
+
+    if (canvas.style.display === 'none') {
+      canvas.style.display = 'block';
+      if (placeholder) placeholder.style.display = 'none';
+      document.getElementById(`stats-${id}`).style.display = 'flex';
+    }
+  };
+
+  ws.onclose = () => {
+    clearInterval(ws._pingInterval);
+    delete state.wsStreams[id];
+  };
+
+  ws.onerror = () => ws.close();
+  state.wsStreams[id] = ws;
+}
+
+function disconnectCameraWS(id) {
+  if (state.wsStreams[id]) {
+    state.wsStreams[id].close();
+    delete state.wsStreams[id];
+  }
+  const canvas = document.getElementById(`canvas-${id}`);
+  const placeholder = document.querySelector(`#feed-${id} .feed-placeholder`);
+  if (canvas) { canvas.style.display = 'none'; }
+  if (placeholder) { placeholder.style.display = 'flex'; }
+  document.getElementById(`stats-${id}`).style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════
+// ALERT WEBSOCKET
+// ═══════════════════════════════════════════════════
+function connectAlertWS() {
+  const ws = new WebSocket(`${WS_BASE}/ws/alerts`);
+
+  ws.onopen = () => console.log('Alert WS connected.');
+
+  ws.onmessage = (ev) => {
+    try {
+      const event = JSON.parse(ev.data);
+      if (event.type === 'incident') handleIncidentEvent(event);
+    } catch(e) {}
+  };
+
+  ws.onclose = () => setTimeout(connectAlertWS, 3000);
+  ws.onerror = () => ws.close();
+  state.alertWS = ws;
+}
+
+function handleIncidentEvent(ev) {
+  state.incidents++;
+  document.getElementById('incidentCount').textContent = `${state.incidents} INCIDENT${state.incidents > 1 ? 'S' : ''}`;
+  document.getElementById('incidentDot').className = 'dot alert';
+  document.getElementById('s-incidents').textContent = state.incidents;
+
+  // Flash camera tile
+  const tile = document.getElementById(`tile-${ev.camera_id}`);
+  if (tile) {
+    tile.classList.add('alert');
+    setTimeout(() => tile.classList.remove('alert'), 8000);
+  }
+
+  // Show banner
+  showBanner(ev);
+
+  // Add alert card
+  addAlertCard(ev);
+}
+
+// ═══════════════════════════════════════════════════
+// ALERT CARD
+// ═══════════════════════════════════════════════════
+function addAlertCard(ev) {
+  const feed = document.getElementById('alertFeed');
+  const ts   = new Date(ev.timestamp).toLocaleTimeString();
+
+  // Clear placeholder
+  const placeholder = feed.querySelector('[style]');
+  if (placeholder) placeholder.remove();
+
+  const card = document.createElement('div');
+  card.className = `alert-item ${ev.event_type}`;
+  card.innerHTML = `
+    <div class="alert-type ${ev.event_type}">${ev.event_type === 'flee' ? '⚡ FLEEING VEHICLE' : '🔴 CRASH DETECTED'}</div>
+    <div class="alert-location">${ev.location}</div>
+    <div class="alert-meta">
+      <span>${ts}</span>
+      <span>${ev.camera_id.toUpperCase()}</span>
+      <span>#GV${ev.vehicle?.global_id}</span>
+    </div>
+    ${ev.vehicle?.plate && ev.vehicle.plate !== 'N/A'
+      ? `<div class="alert-plate">${ev.vehicle.plate}</div>` : ''}
+    <div class="alert-desc">${ev.description}</div>
+    ${ev.top_escape_route ? `
+    <div class="alert-route">
+      ↗ PREDICTED ROUTE: <span>${ev.top_escape_route}</span>
+    </div>` : ''}
+  `;
+  feed.prepend(card);
+
+  // Auto-switch to alerts tab
+  switchTabById('alerts');
+}
+
+// ═══════════════════════════════════════════════════
+// BANNER
+// ═══════════════════════════════════════════════════
+function showBanner(ev) {
+  document.getElementById('bannerTitle').textContent =
+    ev.event_type === 'flee' ? '⚡ FLEEING MOTORCYCLE DETECTED' : '🔴 CRASH / INCIDENT DETECTED';
+  document.getElementById('bannerSub').textContent =
+    `${ev.location}  |  ${ev.vehicle?.plate || 'PLATE N/A'}  |  ${new Date(ev.timestamp).toLocaleTimeString()}`;
+  document.getElementById('incidentBanner').style.display = 'flex';
+  setTimeout(closeBanner, 12000);
+}
+
+function closeBanner() {
+  document.getElementById('incidentBanner').style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════
+// STATUS POLLING
+// ═══════════════════════════════════════════════════
+async function pollStatus() {
+  try {
+    const res = await fetch(`${API}/api/cameras`);
+    const data = await res.json();
+    let activeCnt = 0;
+    Object.entries(data).forEach(([id, cam]) => {
+      state.cameraStates[id] = cam;
+      updateCameraTile(id, cam);
+      if (cam.state === 'STREAMING') activeCnt++;
+    });
+    document.getElementById('camCount').textContent = `${activeCnt} / 6 CAMERAS`;
+    document.getElementById('liveCount').textContent = `${activeCnt} LIVE`;
+    document.getElementById('s-active').textContent = activeCnt;
+    updateCamHealth(data);
+  } catch(e) {}
+
+  try {
+    const res = await fetch(`${API}/api/priorities`);
+    const prio = await res.json();
+    state.priorities = prio;
+    updatePriorityBars(prio);
+  } catch(e) {}
+}
+
+function updateCameraTile(id, cam) {
+  const tile  = document.getElementById(`tile-${id}`);
+  const badge = document.getElementById(`badge-${id}`);
+  const btn   = document.getElementById(`toggle-${id}`);
+
+  if (!tile) return;
+
+  const s = cam.state;
+  tile.className = `camera-tile ${s === 'STREAMING' ? 'streaming' : ''}`;
+  badge.className = `cam-state-badge ${s.toLowerCase()}`;
+  badge.textContent = s;
+
+  if (s === 'STREAMING') {
+    btn.textContent = 'STOP';
+    btn.className   = 'cam-toggle streaming';
+    document.getElementById(`fps-${id}`).textContent  = cam.fps || '—';
+    document.getElementById(`fr-${id}`).textContent   = cam.frames_read || '—';
+    document.getElementById(`drop-${id}`).textContent = cam.dropped || '0';
+  } else {
+    btn.textContent = 'START';
+    btn.className   = 'cam-toggle';
+  }
+}
+
+function updateCamHealth(data) {
+  const container = document.getElementById('camHealth');
+  container.innerHTML = Object.entries(data).map(([id, cam]) => `
+    <div class="stat-row">
+      <span class="stat-label" style="font-size:10px;font-family:var(--mono)">${id}</span>
+      <span class="stat-value ${cam.state === 'STREAMING' ? 'green' : 'red'}" style="font-size:10px">
+        ${cam.state === 'STREAMING' ? cam.fps + ' fps' : cam.state}
+      </span>
+    </div>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════════════
+// PRIORITY BARS
+// ═══════════════════════════════════════════════════
+function buildPriorityBars() {
+  const container = document.getElementById('priorityBars');
+  container.innerHTML = Object.entries(CAMERAS).map(([id]) => `
+    <div class="priority-bar-row">
+      <span class="priority-bar-label">${id.toUpperCase()}</span>
+      <div class="priority-bar-track">
+        <div class="priority-bar-fill" id="pbar-${id}" style="width:10%"></div>
+      </div>
+      <span class="priority-bar-val" id="pval-${id}">1</span>
+    </div>
+  `).join('');
+}
+
+function updatePriorityBars(priorities) {
+  const max = Math.max(...Object.values(priorities)) || 1;
+  Object.entries(priorities).forEach(([id, val]) => {
+    const fill = document.getElementById(`pbar-${id}`);
+    const text = document.getElementById(`pval-${id}`);
+    if (fill) {
+      const pct = Math.round((val / max) * 100);
+      fill.style.width = pct + '%';
+      fill.className = `priority-bar-fill ${pct >= 80 ? 'high' : pct <= 20 ? 'low' : ''}`;
+    }
+    if (text) text.textContent = val;
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// VEHICLE POLLING
+// ═══════════════════════════════════════════════════
+async function pollVehicles() {
+  try {
+    const res = await fetch(`${API}/api/vehicles`);
+    const data = await res.json();
+    state.vehicles.total      = data.total_vehicles || 0;
+    state.vehicles.motorcycles= data.motorcycles || 0;
+    state.vehicles.multi_cam  = data.multi_camera_vehicles || 0;
+    document.getElementById('s-vehicles').textContent = data.total_vehicles || 0;
+    document.getElementById('s-motos').textContent    = data.motorcycles || 0;
+    document.getElementById('s-reid').textContent     = data.multi_camera_vehicles || 0;
+  } catch(e) {}
+
+  try {
+    const res   = await fetch(`${API}/api/vehicles/motorcycles`);
+    const motos = await res.json();
+    renderVehicleList(motos);
+  } catch(e) {}
+}
+
+function renderVehicleList(motos) {
+  const container = document.getElementById('vehicleList');
+  if (!motos.length) {
+    container.innerHTML = `<div style="padding:20px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:2px;">NO VEHICLES TRACKED</div>`;
+    return;
+  }
+  container.innerHTML = motos.map(gv => `
+    <div class="vehicle-card motorcycle">
+      <div class="vehicle-card-header">
+        <span class="vehicle-id">#GV${gv.global_id}</span>
+        <span class="vehicle-tag">MOTORCYCLE</span>
+      </div>
+      <div class="vehicle-plate">${gv.plate && gv.plate !== 'N/A' ? gv.plate : '— UNREAD —'}</div>
+      <div class="vehicle-cameras">
+        ${(gv.movement || []).map(m => `<span class="cam-chip">${m.camera_id}</span>`).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════════════
+// INCIDENTS POLLING
+// ═══════════════════════════════════════════════════
+async function pollIncidents() {
+  try {
+    const res  = await fetch(`${API}/api/incidents`);
+    const data = await res.json();
+    if (data.length > state.incidents) {
+      state.incidents = data.length;
+      document.getElementById('s-incidents').textContent = state.incidents;
+      document.getElementById('incidentCount').textContent =
+        `${state.incidents} INCIDENT${state.incidents > 1 ? 'S' : ''}`;
+    }
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel-content').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById(`tab-${name}`).classList.add('active');
+}
+
+function switchTabById(name) {
+  const tabs = document.querySelectorAll('.tab');
+  const idx  = ['alerts','stats','vehicles'].indexOf(name);
+  if (idx >= 0) tabs[idx].click();
+}
+
+// ═══════════════════════════════════════════════════
+// CLOCK
+// ═══════════════════════════════════════════════════
+function startClock() {
+  const el = document.getElementById('headerTime');
+  function tick() {
+    const now = new Date();
+    el.textContent = now.toLocaleTimeString('en-IN', { hour12: false });
+  }
+  tick();
+  setInterval(tick, 1000);
+}
+
+// ══ Boot ══
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
