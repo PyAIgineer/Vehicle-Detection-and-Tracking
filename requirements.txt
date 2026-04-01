@@ -1,29 +1,27 @@
-# Sentinel Incident Intelligence System — Dependencies
+# Sentinel — Requirements
 # Install: pip install -r requirements.txt
 
-# ── Core ML ───────────────────────────────────────────
-ultralytics>=8.2.0         # YOLOv8 + ByteTrack tracker built-in
-opencv-python>=4.9.0
-numpy>=1.26.0
-Pillow>=10.0.0
+# API server
+fastapi
+uvicorn[standard]
+python-dotenv
 
-# ── LPR ───────────────────────────────────────────────
-easyocr>=1.7.1
-# surya-ocr              # uncomment if OCR_BACKEND = "surya"
+# Computer vision
+opencv-python
+numpy
 
-# ── Groq API ──────────────────────────────────────────
-groq>=0.9.0
+# YOLO detection + ByteTrack
+ultralytics
 
-# ── ReID (optional deep embeddings) ───────────────────
-# torchreid              # uncomment for deep ReID (OSNet)
-# torch>=2.0.0
-# torchvision>=0.15.0
+# Embeddings (ResNet18)
+torch
+torchvision
 
-# ── FastAPI server ────────────────────────────────────
-fastapi>=0.111.0
-uvicorn[standard]>=0.29.0
-python-multipart>=0.0.9
-websockets>=12.0
+# OCR
+easyocr
 
-# ── Utilities ─────────────────────────────────────────
-python-dotenv>=1.0.0
+# LLM (report narrative + Groq Vision)
+groq
+
+# Vector DB (ReID)
+qdrant-client

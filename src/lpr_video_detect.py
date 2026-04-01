@@ -40,10 +40,10 @@ logger = logging.getLogger("lpr_test")
 # ╚══════════════════════════════════════════════════════╝
 
 # ── Input ─────────────────────────────────────────────
-VIDEO_PATH      = "input_video/video2.mp4"            # path to your test video file
+VIDEO_PATH      = "input_video/video1.mp4"            # path to your test video file
 
 # ── YOLO ──────────────────────────────────────────────
-YOLO_WEIGHTS    = "weights/best.pt"     # your plate detector weights
+YOLO_WEIGHTS    = "weights/lpr_best.pt"     # your plate detector weights
 YOLO_CONF       = 0.45                  # YOLO detection confidence threshold
 YOLO_IMG_SIZE   = 640                   # inference image size
 
@@ -55,12 +55,12 @@ SKIP_FRAMES     = 10                    # run YOLO+Groq every Nth frame
                                         # 20 → highway / parked
 
 # ── OCR ───────────────────────────────────────────────
-OCR_BACKEND     = "easyocr"             # "easyocr"  |  "surya"
+OCR_BACKEND     = "surya"             # "easyocr"  |  "surya"
 OCR_GPU         = True                  # False if no GPU
 OCR_CONF_THRESH = 0.5                   # min OCR confidence to prefer OCR over Groq text
 
 # ── Output ────────────────────────────────────────────
-SAVE_VIDEO      = True                  # save annotated output .mp4
+SAVE_VIDEO      = False                  # save annotated output .mp4
 SHOW_WINDOW     = True                  # False on headless / SSH server
 OUTPUT_DIR = Path("output")
 

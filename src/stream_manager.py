@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 """
 stream_manager.py — Per-Camera RTSP Stream Manager
 ====================================================
@@ -186,16 +189,17 @@ class CameraStream:
         self.stats.state = StreamState.STOPPED
 
     def _open_capture(self) -> Optional[cv2.VideoCapture]:
-        """Open RTSP with TCP transport and optimal buffering."""
+        """Open RTSP forcing TCP — prevents H.264 MB decode errors on Windows."""
         import os
-        # Force TCP at ffmpeg level — prevents H.264 decode errors over UDP
+
+        # Windows-correct way: set env var with semicolon separator BEFORE VideoCapture
         if config.RTSP_TRANSPORT == "tcp":
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                "rtsp_transport;tcp|stimeout;5000000"
+            )
 
         cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)   # 10s connect timeout
-        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)   # 10s read timeout
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)   # 1 was too small for H264 inter-frame refs
 
         if not cap.isOpened():
             logger.error(f"[{self.camera_id}] Cannot open stream: {self.rtsp_url}")
@@ -203,6 +207,15 @@ class CameraStream:
             self.stats.errors += 1
             cap.release()
             return None
+
+        w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        logger.info(
+            f"[{self.camera_id}] Capture opened  "
+            f"transport={config.RTSP_TRANSPORT.upper()}  "
+            f"res={w}x{h}  fps={fps:.0f}"
+        )
         return cap
 
     def _wait_reconnect(self) -> None:

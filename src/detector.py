@@ -55,7 +55,9 @@ class Detection:
     is_crash:   bool  = False
     wrong_way:  bool  = False
     anomaly_score: float = 0.0
-
+    
+    # Padded vehicle crop for LPR + ReID
+    crop: Optional[np.ndarray] = None
 
 @dataclass
 class TrackHistory:
@@ -177,6 +179,13 @@ class VehicleDetector:
                     is_motorcycle = True,   # plate model tracks vehicles — treat all as targets
                     center      = (cx, cy),
                 )
+                # Extract padded crop (used by LPR + ReID in pipeline)
+                pad  = config.CROP_PAD_PX
+                fh, fw = frame.shape[:2]
+                det.crop = frame[
+                    max(0, y1 - pad) : min(fh, y2 + pad),
+                    max(0, x1 - pad) : min(fw, x2 + pad),
+                ].copy()
 
                 # Compute speed + direction from history
                 self._update_track_history(camera_id, tid, (cx, cy), timestamp, det)

@@ -1,25 +1,30 @@
 """
-main.py — Sentinel Incident Intelligence System — FastAPI Server
-================================================================
-Endpoints:
-  GET  /api/cameras              — list all cameras + status
-  POST /api/cameras/{id}/start   — start stream
-  POST /api/cameras/{id}/stop    — stop stream
-  POST /api/cameras/start-all    — start all 6 cameras
-  POST /api/cameras/stop-all     — stop all cameras
-  GET  /api/incidents            — list all incidents
-  GET  /api/incidents/{id}       — get incident report
-  GET  /api/vehicles             — all global vehicles tracked
-  GET  /api/vehicles/{id}        — specific vehicle with movement graph
-  WS   /ws/camera/{id}           — JPEG frame stream for one camera
-  WS   /ws/alerts                — realtime alert events
-
+main.py — Sentinel Incident Intelligence System — FastAPI Server (Dev Mode)
+===========================================================================
 Run:
-  pip install fastapi uvicorn python-dotenv
-  uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+
+Endpoints:
+  GET  /api/cameras                     — list cameras + status
+  POST /api/cameras/{id}/start          — start a camera stream
+  POST /api/cameras/{id}/stop
+  POST /api/cameras/start-all
+  POST /api/cameras/stop-all
+  GET  /api/incidents                   — list all incidents
+  GET  /api/incidents/{id}              — full incident report
+  GET  /api/vehicles                    — registry summary
+  GET  /api/vehicles/{id}/timeline      — sightings + embedding + graph edges
+  GET  /api/graph                       — full spatiotemporal graph
+  GET  /api/graph/vehicles              — lightweight per-vehicle summary
+  GET  /api/priorities                  — camera priority scores
+  WS   /ws/camera/{id}                  — JPEG frame stream
+  WS   /ws/alerts                       — real-time incident alerts
 """
 
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import cv2
 import time
 import asyncio
@@ -29,31 +34,28 @@ import numpy as np
 from datetime import datetime
 from typing import Optional
 from contextlib import asynccontextmanager
+from pathlib import Path
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
-from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-
-# Suppress noisy uvicorn access log (HTTP GET/POST spam)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-# Only show WARNING+ from these chatty libraries
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("asyncio").setLevel(logging.WARNING)
 logger = logging.getLogger("SentinelAPI")
 
 import config
-from stream_manager import StreamManager, StreamState
-from detector       import VehicleDetector, IncidentEvent
-from lpr_pipeline   import LPRPipeline
-from reid           import ReIDEngine
-from escape_router  import EscapeRouter, CameraOrchestrator, SpatiotemporalGraph
+from stream_manager  import StreamManager, StreamState
+from detector        import VehicleDetector, IncidentEvent
+from lpr_pipeline    import LPRPipeline
+from reid            import ReIDEngine
+from graph           import SpatiotemporalGraph
+from escape_router   import EscapeRouter, CameraOrchestrator
 from incident_report import ReportGenerator, IncidentReport
 
 
@@ -67,17 +69,24 @@ class AppState:
         self.detector      = VehicleDetector()
         self.lpr           = LPRPipeline()
         self.reid_engine   = ReIDEngine()
+        self.graph         = SpatiotemporalGraph()
         self.escape_router = EscapeRouter()
         self.orchestrator  = CameraOrchestrator(list(config.RTSP_CAMERAS.keys()))
-        self.graph         = SpatiotemporalGraph()
         self.report_gen    = ReportGenerator()
 
         self.incidents:   list[IncidentReport] = []
         self.alert_queue: asyncio.Queue        = asyncio.Queue()
 
-        # WS connection registries
-        self.camera_ws:  dict[str, set[WebSocket]] = {c: set() for c in config.RTSP_CAMERAS}
-        self.alert_ws:   set[WebSocket]             = set()
+        self.bw_bytes:    dict[str, int]   = {c: 0 for c in config.RTSP_CAMERAS}
+        self.bw_mbps:     dict[str, float] = {c: 0.0 for c in config.RTSP_CAMERAS}
+        self.bw_reset_ts: float            = time.time()
+
+        self.camera_ws: dict[str, set[WebSocket]] = {c: set() for c in config.RTSP_CAMERAS}
+        self.alert_ws:  set[WebSocket]             = set()
+
+        import secrets
+        self.ws_token: str = secrets.token_urlsafe(32)
+        logger.info("App state initialised.")
 
 
 state: Optional[AppState] = None
@@ -87,30 +96,25 @@ state: Optional[AppState] = None
 async def lifespan(app: FastAPI):
     global state
     state = AppState()
-    logger.info("Sentinel system initialised.")
+    logger.info("Sentinel started.")
     asyncio.create_task(pipeline_loop())
     yield
     state.stream_mgr.stop_all()
-    logger.info("Sentinel system shutdown.")
+    logger.info("Sentinel shutdown.")
 
 
 app = FastAPI(
-    title="Sentinel Incident Intelligence System",
-    version="1.0.0",
-    lifespan=lifespan,
+    title   = "Sentinel Incident Intelligence System",
+    version = "2.0.0-dev",
+    lifespan= lifespan,
 )
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Serve dashboard
-# Auto-create frontend dir and mount only if it exists
-Path("frontend").mkdir(exist_ok=True)
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+BASE_DIR = Path(__file__).resolve().parent.parent   # D:\Vehicle_dt\
+FRONTEND_DIR = BASE_DIR / "frontend"
+FRONTEND_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -118,11 +122,6 @@ app.mount("/static", StaticFiles(directory="frontend"), name="static")
 # ══════════════════════════════════════════════════════════════════
 
 async def pipeline_loop():
-    """
-    Main async loop: reads frames from all active cameras,
-    runs detection/LPR/ReID, pushes frames to WS clients,
-    processes incident events.
-    """
     ws_delay = 1.0 / config.WEBSOCKET_FPS
 
     while True:
@@ -133,74 +132,78 @@ async def pipeline_loop():
             if frame is None:
                 continue
 
-            # ── Detection pipeline ──────────────────────────────
-            detections, annotated = state.detector.process_frame(frame, cam_id, ts)
+            # ── Detection + ByteTrack ───────────────────────────
+            try:
+                detections, annotated = state.detector.process_frame(frame, cam_id, ts)
 
-            # ── LPR: detector already found plate bbox, pass crop directly ──
-            for det in detections:
-                x1, y1, x2, y2 = det.bbox
-                # Expand crop slightly for better OCR context
-                h, w = frame.shape[:2]
-                pad = 6
-                crop = frame[max(0,y1-pad):min(h,y2+pad), max(0,x1-pad):min(w,x2+pad)]
-                lpr_results = state.lpr.process_frame(crop, cam_id, det.track_id, ts)
+                for det in detections:
+                    # det.crop is already extracted (padded) in detector.py
+                    # Run LPR on it for plate text
+                    lpr_results = state.lpr.process_frame(
+                        det.crop, cam_id, det.track_id, ts
+                    )
+                    plate_str   = None
+                    plate_chars = ""
+                    if lpr_results:
+                        best = lpr_results[0]
+                        if best.valid:
+                            plate_str = best.plate
+                        plate_chars = best.plate or ""
+                        annotated   = state.lpr.draw_overlay(annotated, lpr_results)
 
-                plate_str = None
-                if lpr_results and lpr_results[0].valid:
-                    plate_str = lpr_results[0].plate
-                    annotated = state.lpr.draw_overlay(annotated, lpr_results)
+                    # ── ReID ─────────────────────────────────────────
+                    gv = state.reid_engine.match_or_create(
+                        camera_id     = cam_id,
+                        track_id      = det.track_id,
+                        crop          = det.crop,
+                        plate         = plate_str,
+                        is_motorcycle = det.is_motorcycle,
+                        timestamp     = ts,
+                        bbox          = det.bbox,
+                        plate_chars   = plate_chars,
+                    )
 
-                # ── ReID ────────────────────────────────────────
-                gv = state.reid_engine.match_or_create(
-                    camera_id     = cam_id,
-                    track_id      = det.track_id,
-                    crop          = crop,
-                    plate         = plate_str,
-                    is_motorcycle = det.is_motorcycle,
-                    timestamp     = ts,
-                    bbox          = det.bbox,
-                )
+                    # ── Spatiotemporal graph ──────────────────────────
+                    state.graph.add_sighting(
+                        global_vehicle_id = gv.global_id,
+                        camera_id         = cam_id,
+                        timestamp         = ts or datetime.now(),
+                        confidence        = gv.sightings[-1].confidence,
+                        plate             = gv.plate,
+                        embedding         = gv.embedding,
+                    )
+            except Exception as exc:
+                logger.error(f"[pipeline] {cam_id} frame error: {exc}", exc_info=True)
+                annotated = frame   # push raw frame so stream stays alive
 
-                # ── Spatiotemporal graph ─────────────────────────
-                sighting = gv.sightings[-1]
-                state.graph.add_sighting(sighting, gv.global_id)
-
-            # ── Push annotated frame to WS clients ───────────────
+            # ── Push frame to WS clients ─────────────────────────
             if state.camera_ws.get(cam_id):
-                jpg_bytes = _encode_frame(annotated)
-                await _broadcast_frame(cam_id, jpg_bytes)
+                jpg = _encode_frame(annotated)
+                await _broadcast_frame(cam_id, jpg)
 
-        # ── Process incident events ─────────────────────────────
-        events = state.detector.pop_events()
-        for event in events:
+        # ── Process incidents ───────────────────────────────────
+        for event in state.detector.pop_events():
             await _handle_incident(event)
 
-        # ── Maintain target FPS ─────────────────────────────────
         elapsed = time.monotonic() - frame_start
         await asyncio.sleep(max(0, ws_delay - elapsed))
 
 
 async def _handle_incident(event: IncidentEvent):
-    """Generate report and push alert for a detected incident event."""
-    logger.warning(f"[INCIDENT] {event.event_type.upper()} on {event.camera_id}: {event.description}")
+    logger.warning(f"[INCIDENT] {event.event_type.upper()} @ {event.camera_id}: {event.description}")
 
-    # Find the global vehicle for this track
-    all_vehicles = state.reid_engine.get_all_vehicles()
     gv = next(
-        (v for v in all_vehicles
+        (v for v in state.reid_engine.get_all_vehicles()
          if event.track_id in v.local_tracks.get(event.camera_id, [])),
-        None
+        None,
     )
-
     if gv is None:
-        logger.warning(f"No GlobalVehicle found for track #{event.track_id} on {event.camera_id}")
+        logger.warning(f"No GlobalVehicle for track #{event.track_id} on {event.camera_id}")
         return
 
-    # Predict escape routes
     routes = state.escape_router.predict_routes(event.camera_id, gv)
     state.orchestrator.apply_escape_routes(routes)
 
-    # Generate report
     report = state.report_gen.generate(
         incident_type  = event.event_type,
         trigger_camera = event.camera_id,
@@ -212,8 +215,8 @@ async def _handle_incident(event: IncidentEvent):
     )
     state.incidents.append(report)
 
-    # Push alert to WS clients
-    alert_payload = {
+    emb = gv.embedding
+    alert = {
         "type":        "incident",
         "incident_id": report.incident_id,
         "event_type":  event.event_type,
@@ -222,14 +225,16 @@ async def _handle_incident(event: IncidentEvent):
         "timestamp":   event.timestamp.isoformat(),
         "description": event.description,
         "vehicle": {
-            "global_id": gv.global_id,
-            "plate":     gv.plate or "N/A",
-            "is_motorcycle": gv.is_motorcycle,
+            "global_id":      gv.global_id,
+            "plate":          gv.plate or "N/A",
+            "is_motorcycle":  gv.is_motorcycle,
+            "vehicle_color":  emb.dominant_color if emb else "unknown",
+            "helmet_present": emb.helmet_present if emb else False,
+            "clothing_color": emb.clothing_color if emb else "unknown",
         },
-        "top_escape_route": routes[0].description if routes else "N/A",
+        "top_route": routes[0].description if routes else "N/A",
     }
-    await state.alert_queue.put(alert_payload)
-    await _broadcast_alert(alert_payload)
+    await _broadcast_alert(alert)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -242,15 +247,15 @@ async def get_cameras():
 
 
 @app.post("/api/cameras/start-all")
-async def start_all_cameras():
+async def start_all():
     state.stream_mgr.start_all()
-    return {"status": "ok", "message": "All cameras starting..."}
+    return {"status": "ok"}
 
 
 @app.post("/api/cameras/stop-all")
-async def stop_all_cameras():
+async def stop_all():
     state.stream_mgr.stop_all()
-    return {"status": "ok", "message": "All cameras stopped."}
+    return {"status": "ok"}
 
 
 @app.post("/api/cameras/{camera_id}/start")
@@ -258,7 +263,7 @@ async def start_camera(camera_id: str):
     if camera_id not in config.RTSP_CAMERAS:
         raise HTTPException(404, f"Camera '{camera_id}' not found.")
     state.stream_mgr.start_camera(camera_id)
-    return {"status": "ok", "camera_id": camera_id, "action": "started"}
+    return {"status": "ok", "camera_id": camera_id}
 
 
 @app.post("/api/cameras/{camera_id}/stop")
@@ -266,7 +271,7 @@ async def stop_camera(camera_id: str):
     if camera_id not in config.RTSP_CAMERAS:
         raise HTTPException(404, f"Camera '{camera_id}' not found.")
     state.stream_mgr.stop_camera(camera_id)
-    return {"status": "ok", "camera_id": camera_id, "action": "stopped"}
+    return {"status": "ok", "camera_id": camera_id}
 
 
 @app.post("/api/cameras/{camera_id}/restart")
@@ -274,7 +279,7 @@ async def restart_camera(camera_id: str):
     if camera_id not in config.RTSP_CAMERAS:
         raise HTTPException(404, f"Camera '{camera_id}' not found.")
     state.stream_mgr.restart_camera(camera_id)
-    return {"status": "ok", "camera_id": camera_id, "action": "restarted"}
+    return {"status": "ok", "camera_id": camera_id}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -285,13 +290,14 @@ async def restart_camera(camera_id: str):
 async def get_incidents():
     return [
         {
-            "incident_id":   r.incident_id,
-            "type":          r.incident_type,
-            "camera_id":     r.trigger_camera,
-            "location":      config.CAMERA_LOCATIONS.get(r.trigger_camera, r.trigger_camera),
-            "time":          r.trigger_time.isoformat(),
-            "vehicle_plate": r.vehicle.plate or "N/A",
-            "generated_at":  r.generated_at.isoformat(),
+            "incident_id":    r.incident_id,
+            "type":           r.incident_type,
+            "camera_id":      r.trigger_camera,
+            "location":       config.CAMERA_LOCATIONS.get(r.trigger_camera, r.trigger_camera),
+            "time":           r.trigger_time.isoformat(),
+            "vehicle_plate":  r.vehicle.plate or "N/A",
+            "vehicle_color":  r.vehicle.embedding.dominant_color if r.vehicle.embedding else "unknown",
+            "generated_at":   r.generated_at.isoformat(),
         }
         for r in state.incidents
     ]
@@ -305,14 +311,6 @@ async def get_incident(incident_id: str):
     return report.to_dict()
 
 
-@app.get("/api/incidents/{incident_id}/text")
-async def get_incident_text(incident_id: str):
-    report = next((r for r in state.incidents if r.incident_id == incident_id), None)
-    if report is None:
-        raise HTTPException(404, f"Incident '{incident_id}' not found.")
-    return {"text": report.to_text()}
-
-
 # ══════════════════════════════════════════════════════════════════
 # REST — VEHICLES
 # ══════════════════════════════════════════════════════════════════
@@ -324,7 +322,6 @@ async def get_vehicles():
 
 @app.get("/api/vehicles/motorcycles")
 async def get_motorcycles():
-    motos = state.reid_engine.get_motorcycles()
     return [
         {
             "global_id": gv.global_id,
@@ -333,7 +330,7 @@ async def get_motorcycles():
             "sightings": len(gv.sightings),
             "movement":  gv.movement_summary,
         }
-        for gv in motos
+        for gv in state.reid_engine.get_motorcycles()
     ]
 
 
@@ -342,16 +339,43 @@ async def get_vehicle_timeline(global_id: int):
     gv = state.reid_engine.get_vehicle(global_id)
     if gv is None:
         raise HTTPException(404, f"Vehicle #{global_id} not found.")
+    emb = gv.embedding
     return {
-        "global_id":  gv.global_id,
-        "plate":      gv.plate,
+        "global_id":      gv.global_id,
+        "plate":          gv.plate,
+        "is_motorcycle":  gv.is_motorcycle,
+        "embedding": {
+            "dominant_color": emb.dominant_color if emb else None,
+            "helmet_present": emb.helmet_present if emb else None,
+            "helmet_color":   emb.helmet_color   if emb else None,
+            "clothing_color": emb.clothing_color if emb else None,
+            "vehicle_type":   emb.vehicle_type   if emb else None,
+            "plate_chars":    emb.plate_chars     if emb else None,
+        },
         "movement":   gv.movement_summary,
-        "graph":      state.graph.get_timeline(gv.global_id),
+        "trajectory": state.graph.get_trajectory(gv.global_id),
+        "edges":      state.graph.get_edges_for_vehicle(gv.global_id),
     }
 
 
 # ══════════════════════════════════════════════════════════════════
-# REST — CAMERA PRIORITIES
+# REST — SPATIOTEMPORAL GRAPH
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/graph")
+async def get_graph():
+    """Full graph — all nodes + edges."""
+    return state.graph.to_dict()
+
+
+@app.get("/api/graph/vehicles")
+async def get_graph_vehicles():
+    """Per-vehicle summary from graph (color, helmet, camera count…)."""
+    return state.graph.get_all_vehicles_summary()
+
+
+# ══════════════════════════════════════════════════════════════════
+# REST — MISC
 # ══════════════════════════════════════════════════════════════════
 
 @app.get("/api/priorities")
@@ -359,33 +383,56 @@ async def get_priorities():
     return state.orchestrator.get_all_priorities()
 
 
+@app.get("/api/token")
+async def get_ws_token():
+    return {"token": state.ws_token}
+
+
+@app.get("/api/bandwidth")
+async def get_bandwidth():
+    result = {}
+    for cam_id in config.RTSP_CAMERAS:
+        mbps = state.bw_mbps.get(cam_id, 0.0)
+        result[cam_id] = {
+            "mbps":          mbps,
+            "kb_per_frame":  round((mbps * 1_000_000 / 8) / max(config.WEBSOCKET_FPS, 1) / 1024, 1),
+        }
+    return {"cameras": result, "total_mbps": round(sum(v["mbps"] for v in result.values()), 2)}
+
+
 # ══════════════════════════════════════════════════════════════════
 # WEBSOCKET — CAMERA STREAMS
 # ══════════════════════════════════════════════════════════════════
 
+def _verify_token(token: Optional[str]) -> bool:
+    import hmac
+    return bool(token) and hmac.compare_digest(token, state.ws_token)
+
+
 @app.websocket("/ws/camera/{camera_id}")
-async def camera_stream(websocket: WebSocket, camera_id: str):
+async def camera_stream(websocket: WebSocket, camera_id: str, token: Optional[str] = None):
     if camera_id not in config.RTSP_CAMERAS:
         await websocket.close(code=4004, reason="Camera not found")
         return
-
+    if not _verify_token(token):
+        await websocket.close(code=4003, reason="Unauthorized")
+        return
     await websocket.accept()
     state.camera_ws[camera_id].add(websocket)
-    logger.info(f"WS client connected: {camera_id}  ({len(state.camera_ws[camera_id])} total)")
-
     try:
         while True:
-            await websocket.receive_text()  # keep-alive ping
+            await websocket.receive_text()
     except WebSocketDisconnect:
         state.camera_ws[camera_id].discard(websocket)
-        logger.info(f"WS client disconnected: {camera_id}")
 
 
 @app.websocket("/ws/alerts")
-async def alert_stream(websocket: WebSocket):
+async def alert_stream(websocket: WebSocket, token: Optional[str] = None):
+    if not _verify_token(token):
+        await websocket.close(code=4003, reason="Unauthorized")
+        return
     await websocket.accept()
     state.alert_ws.add(websocket)
-    logger.info(f"Alert WS client connected  ({len(state.alert_ws)} total)")
     try:
         while True:
             await websocket.receive_text()
@@ -399,9 +446,9 @@ async def alert_stream(websocket: WebSocket):
 
 @app.get("/")
 async def serve_dashboard():
-    p = Path("frontend/dashboard.html")
+    p = FRONTEND_DIR / "dashboard.html"
     if not p.exists():
-        return JSONResponse({"status": "ok", "message": "Sentinel API running. Place dashboard.html in frontend/ folder."})
+        return JSONResponse({"status": "ok", "message": "Sentinel API running. Add dashboard.html to frontend/."})
     return FileResponse(str(p))
 
 
@@ -409,19 +456,30 @@ async def serve_dashboard():
 # HELPERS
 # ══════════════════════════════════════════════════════════════════
 
-def _encode_frame(frame: np.ndarray) -> bytes:
+def _encode_frame(frame: np.ndarray) -> str:
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY])
     return base64.b64encode(buf.tobytes()).decode("utf-8")
 
 
 async def _broadcast_frame(camera_id: str, jpg_b64: str):
-    dead = set()
+    dead     = set()
+    byte_len = len(jpg_b64)
     for ws in state.camera_ws.get(camera_id, set()).copy():
         try:
             await ws.send_text(jpg_b64)
+            state.bw_bytes[camera_id] = state.bw_bytes.get(camera_id, 0) + byte_len
         except Exception:
             dead.add(ws)
     state.camera_ws[camera_id] -= dead
+
+    now     = time.time()
+    elapsed = now - state.bw_reset_ts
+    if elapsed >= 2.0:
+        for cid in config.RTSP_CAMERAS:
+            bits = state.bw_bytes.get(cid, 0) * 8
+            state.bw_mbps[cid]  = round(bits / elapsed / 1_000_000, 2)
+            state.bw_bytes[cid] = 0
+        state.bw_reset_ts = now
 
 
 async def _broadcast_alert(payload: dict):
@@ -438,10 +496,5 @@ async def _broadcast_alert(payload: dict):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host=config.API_HOST,
-        port=config.API_PORT,
-        reload=False,
-        log_level=config.LOG_LEVEL.lower(),
-    )
+    uvicorn.run("main:app", host=config.API_HOST, port=config.API_PORT,
+                reload=False, log_level=config.LOG_LEVEL.lower())

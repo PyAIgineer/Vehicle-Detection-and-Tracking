@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 """
 lpr_pipeline.py — LPR Pipeline (RTSP-adapted from lpr_video_detect.py)
 =======================================================================

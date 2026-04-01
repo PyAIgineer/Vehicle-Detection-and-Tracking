@@ -708,6 +708,86 @@ header::after {
   font-family: var(--mono);
 }
 
+
+/* ══════════════════════════════════════════════════
+   CAMERA EXPAND / FULLSCREEN
+══════════════════════════════════════════════════ */
+
+/* When one tile is expanded, grid shows it spanning all columns */
+.camera-grid.has-expanded .camera-tile:not(.expanded) {
+  display: none;
+}
+.camera-grid.has-expanded .camera-tile.expanded {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+}
+
+/* Expanded tile header gets bigger */
+.camera-tile.expanded .cam-id     { font-size: 11px; }
+.camera-tile.expanded .cam-location{ font-size: 13px; }
+.camera-tile.expanded .cam-stats  { font-size: 10px; }
+
+/* Expand / collapse button */
+.cam-expand {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.cam-expand:hover { border-color: var(--amber-dim); color: var(--amber); }
+.cam-expand.active { border-color: var(--cyan); color: var(--cyan); }
+
+/* Native fullscreen overlay (double-click) */
+.camera-tile:-webkit-full-screen { width: 100vw; height: 100vh; }
+.camera-tile:-moz-full-screen    { width: 100vw; height: 100vh; }
+.camera-tile:fullscreen          { width: 100vw; height: 100vh; background: #000; }
+.camera-tile:fullscreen .feed    { height: calc(100% - 36px); }
+
+/* Collapsed tiles strip — shown when one is expanded */
+.cam-strip {
+  display: none;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 6px 0 0 0;
+  overflow-x: auto;
+}
+.cam-strip.visible { display: flex; }
+.cam-strip-thumb {
+  width: 120px;
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  position: relative;
+}
+.cam-strip-thumb:hover { border-color: var(--amber-dim); }
+.cam-strip-thumb.streaming { border-color: #1e3040; }
+.cam-strip-thumb canvas  { width: 100%; height: 68px; object-fit: cover; display: block; }
+.cam-strip-thumb .thumb-label {
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--muted);
+  padding: 2px 5px;
+  letter-spacing: 1px;
+  background: var(--bg-void);
+}
+.cam-strip-thumb .thumb-dot {
+  position: absolute; top: 4px; right: 4px;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--muted);
+}
+.cam-strip-thumb .thumb-dot.live { background: var(--green); box-shadow: 0 0 4px var(--green); }
+
 /* ══════════════════════════════════════════════════
    SCROLLBARS
 ══════════════════════════════════════════════════ */
@@ -788,6 +868,9 @@ header::after {
     <div class="camera-grid" id="cameraGrid">
       <!-- Tiles injected by JS -->
     </div>
+    <div class="cam-strip" id="camStrip">
+      <!-- Thumbnail strip injected by JS when a tile is expanded -->
+    </div>
   </div>
 
   <!-- ── Right Panel ───────────────────── -->
@@ -849,6 +932,16 @@ header::after {
           </div>
         </div>
 
+        <div class="stat-group">
+          <div class="stat-group-title">Bandwidth (WS out)</div>
+          <div id="bwStats">
+            <div class="stat-row">
+              <span class="stat-label">Total</span>
+              <span class="stat-value" id="bw-total">— Mbps</span>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -889,6 +982,7 @@ const state = {
   incidents: 0,
   priorities: {},
   vehicles: { total: 0, motorcycles: 0, multi_camera: 0 },
+  token: null,          // session token fetched once from /api/token
 };
 
 // ═══════════════════════════════════════════════════
@@ -902,7 +996,103 @@ function init() {
   pollStatus();
   setInterval(pollStatus, 3000);
   setInterval(pollVehicles, 5000);
+  setInterval(pollBandwidth, 2000);
   setInterval(pollIncidents, 4000);
+}
+
+
+// ═══════════════════════════════════════════════════
+// EXPAND / FULLSCREEN
+// ═══════════════════════════════════════════════════
+let expandedCam = null;
+
+function expandTile(id) {
+  const grid  = document.getElementById('cameraGrid');
+  const strip = document.getElementById('camStrip');
+  const tile  = document.getElementById(`tile-${id}`);
+  const btn   = document.getElementById(`expand-${id}`);
+
+  if (expandedCam === id) {
+    // ── Collapse back to grid ─────────────────────
+    tile.classList.remove('expanded');
+    grid.classList.remove('has-expanded');
+    strip.classList.remove('visible');
+    strip.innerHTML = '';
+    if (btn) { btn.textContent = '⛶'; btn.classList.remove('active'); }
+    expandedCam = null;
+    return;
+  }
+
+  // ── Collapse any previous expanded tile ──────────
+  if (expandedCam) {
+    const prev = document.getElementById(`tile-${expandedCam}`);
+    const prevBtn = document.getElementById(`expand-${expandedCam}`);
+    if (prev) prev.classList.remove('expanded');
+    if (prevBtn) { prevBtn.textContent = '⛶'; prevBtn.classList.remove('active'); }
+  }
+
+  // ── Expand selected tile ──────────────────────────
+  tile.classList.add('expanded');
+  grid.classList.add('has-expanded');
+  if (btn) { btn.textContent = '⊠'; btn.classList.add('active'); }
+  expandedCam = id;
+
+  // ── Force canvas redraw at new expanded size ─────
+  setTimeout(() => {
+    const canvas = document.getElementById(`canvas-${id}`);
+    if (canvas && canvas._lastFrame) {
+      const img = new Image();
+      img.onload = () => {
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      };
+      img.src = canvas._lastFrame;
+    }
+  }, 50);
+
+  // ── Build thumbnail strip for other cameras ───────
+  strip.innerHTML = '';
+  strip.classList.add('visible');
+  Object.entries(CAMERAS).forEach(([camId, location]) => {
+    if (camId === id) return;
+    const s     = state.cameraStates[camId] || {};
+    const isLive = s.state === 'STREAMING';
+
+    const thumb = document.createElement('div');
+    thumb.className = `cam-strip-thumb ${isLive ? 'streaming' : ''}`;
+    thumb.id = `strip-${camId}`;
+    thumb.title = location;
+    thumb.onclick = () => expandTile(camId);
+    thumb.innerHTML = `
+      <canvas id="strip-canvas-${camId}" style="width:120px;height:68px;display:block;background:#080a0d;"></canvas>
+      <div class="thumb-label">${camId.toUpperCase()}</div>
+      <div class="thumb-dot ${isLive ? 'live' : ''}"></div>
+    `;
+    strip.appendChild(thumb);
+  });
+}
+
+function fullscreenTile(id) {
+  const tile = document.getElementById(`tile-${id}`);
+  if (!tile) return;
+  if (!document.fullscreenElement) {
+    tile.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+// Mirror frames to strip thumbnails
+function mirrorToStrip(camId, jpg_b64) {
+  if (!expandedCam) return;
+  const stripCanvas = document.getElementById(`strip-canvas-${camId}`);
+  if (!stripCanvas) return;
+  const img = new Image();
+  img.onload = () => {
+    stripCanvas.width  = img.naturalWidth;
+    stripCanvas.height = img.naturalHeight;
+    stripCanvas.getContext('2d').drawImage(img, 0, 0);
+  };
+  img.src = 'data:image/jpeg;base64,' + jpg_b64;
 }
 
 // ═══════════════════════════════════════════════════
@@ -921,10 +1111,11 @@ function buildCameraGrid() {
           </div>
           <div class="cam-status-row">
             <span class="cam-state-badge" id="badge-${id}">IDLE</span>
+            <button class="cam-expand" id="expand-${id}" onclick="expandTile('${id}')" title="Expand / Collapse">⛶</button>
             <button class="cam-toggle" id="toggle-${id}" onclick="toggleCamera('${id}')">START</button>
           </div>
         </div>
-        <div class="feed" id="feed-${id}">
+        <div class="feed" id="feed-${id}" ondblclick="fullscreenTile('${id}')" title="Double-click for fullscreen">
           <div class="feed-placeholder">
             <div class="icon">📷</div>
             <div class="label">NO SIGNAL</div>
@@ -970,7 +1161,7 @@ async function stopAll() {
 // ═══════════════════════════════════════════════════
 function connectCameraWS(id) {
   if (state.wsStreams[id]) return;  // already connected
-  const ws = new WebSocket(`${WS_BASE}/ws/camera/${id}`);
+  const ws = new WebSocket(`${WS_BASE}/ws/camera/${id}?token=${state.token}`);
   ws.binaryType = 'blob';
 
   ws.onopen = () => {
@@ -990,8 +1181,11 @@ function connectCameraWS(id) {
       canvas.width  = img.naturalWidth;
       canvas.height = img.naturalHeight;
       canvas.getContext('2d').drawImage(img, 0, 0);
+      canvas._lastFrame = 'data:image/jpeg;base64,' + ev.data;  // cache for redraw
     };
     img.src = 'data:image/jpeg;base64,' + ev.data;
+    // Mirror to thumbnail strip if another cam is expanded
+    if (expandedCam && expandedCam !== id) mirrorToStrip(id, ev.data);
 
     if (canvas.style.display === 'none') {
       canvas.style.display = 'block';
@@ -1025,7 +1219,7 @@ function disconnectCameraWS(id) {
 // ALERT WEBSOCKET
 // ═══════════════════════════════════════════════════
 function connectAlertWS() {
-  const ws = new WebSocket(`${WS_BASE}/ws/alerts`);
+  const ws = new WebSocket(`${WS_BASE}/ws/alerts?token=${state.token}`);
 
   ws.onopen = () => console.log('Alert WS connected.');
 
@@ -1248,6 +1442,32 @@ function renderVehicleList(motos) {
 }
 
 // ═══════════════════════════════════════════════════
+// BANDWIDTH POLLING
+// ═══════════════════════════════════════════════════
+async function pollBandwidth() {
+  try {
+    const res  = await fetch(`${API}/api/bandwidth`);
+    const data = await res.json();
+    document.getElementById('bw-total').textContent = `${data.total_mbps} Mbps`;
+
+    const container = document.getElementById('bwStats');
+    const rows = Object.entries(data.cameras).map(([id, v]) => `
+      <div class="stat-row">
+        <span class="stat-label" style="font-size:10px;font-family:var(--mono)">${id}</span>
+        <span class="stat-value ${v.mbps > 5 ? 'amber' : 'green'}" style="font-size:10px">
+          ${v.mbps} Mbps &nbsp;<span style="color:var(--muted);font-size:9px">${v.kb_per_frame}KB/fr</span>
+        </span>
+      </div>
+    `).join('');
+    container.innerHTML = `
+      <div class="stat-row">
+        <span class="stat-label">Total</span>
+        <span class="stat-value ${data.total_mbps > 20 ? 'red' : 'green'}" id="bw-total">${data.total_mbps} Mbps</span>
+      </div>` + rows;
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════
 // INCIDENTS POLLING
 // ═══════════════════════════════════════════════════
 async function pollIncidents() {
@@ -1293,7 +1513,17 @@ function startClock() {
 }
 
 // ══ Boot ══
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', async () => {
+  // Fetch session token once — required for all WS connections
+  try {
+    const res = await fetch(`${API}/api/token`);
+    const data = await res.json();
+    state.token = data.token;
+  } catch(e) {
+    console.error('Could not fetch WS token — streams will be rejected', e);
+  }
+  init();
+});
 </script>
 </body>
 </html>

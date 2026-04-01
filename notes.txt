@@ -1,0 +1,21 @@
+That's **137,240 bytes = ~134 KB per frame**.
+
+At your current `WEBSOCKET_FPS = 8`:
+```
+134 KB × 8 fps = ~1,072 KB/s = ~8.5 Mbps per camera
+× 6 cameras (if all active)  = ~51 Mbps total
+```
+
+That's high for a local dashboard. Reduce it in `config.py`:
+
+```python
+WEBSOCKET_FPS = 5       # 5 frames/sec is smooth enough for surveillance
+JPEG_QUALITY  = 60      # drop from 75 → saves ~40% size
+```
+
+After that change, expected size drops to:
+```
+~80 KB × 5 fps = ~400 KB/s = ~3.2 Mbps per camera
+```
+
+Restart `main.py` after changing config — no other files need touching.
